@@ -1,0 +1,65 @@
+{
+	"name": "mailstream",
+	"version": "1.0.0",
+	"description": "A TypeScript IMAP client library for streaming email updates",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/quill-co/mailstream"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"files": [
+		"dist",
+		"LICENSE",
+		"README.md"
+	],
+	"scripts": {
+		"build": "rimraf dist && tsc",
+		"build:watch": "tsc -w",
+		"test": "jest",
+		"test:watch": "jest --watch",
+		"test:coverage": "jest --coverage",
+		"lint": "eslint .",
+		"format": "prettier --write .",
+		"prepublishOnly": "npm run test && npm run lint && npm run build",
+		"prepare": "npm run build"
+	},
+	"keywords": [
+		"imap",
+		"email",
+		"typescript",
+		"mail-client",
+		"streaming"
+	],
+	"author": "Quill-Co",
+	"license": "MIT",
+	"dependencies": {
+		"imap": "^0.8.19",
+		"mailparser": "^3.7.2"
+	},
+	"devDependencies": {
+		"@eslint/js": "^9.17.0",
+		"@types/imap": "^0.8.42",
+		"@types/jest": "^29.5.14",
+		"@types/mailparser": "^3.4.5",
+		"@types/node": "^22.10.2",
+		"eslint": "^8.57.1",
+		"eslint-config-prettier": "^9.1.0",
+		"eslint-config-standard": "^17.1.0",
+		"eslint-plugin-import": "^2.31.0",
+		"eslint-plugin-n": "^16.6.2",
+		"eslint-plugin-promise": "^6.6.0",
+		"globals": "^15.13.0",
+		"jest": "^29.7.0",
+		"prettier": "3.4.2",
+		"rimraf": "^5.0.0",
+		"ts-jest": "^29.2.5",
+		"ts-node": "^10.9.2",
+		"tsup": "^8.3.5",
+		"typescript": "^5.7.2",
+		"typescript-eslint": "^8.18.0"
+	},
+	"engines": {
+		"node": ">=18.0.0"
+	}
+}
