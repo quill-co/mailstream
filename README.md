@@ -15,15 +15,15 @@ A TypeScript library for monitoring IMAP email accounts and handling new message
 ## Installation
 
 ```bash
-npm install mailstream
+npm install @quill-co/mailstream
 # or
-yarn add mailstream
+yarn add @quill-co/mailstream
 ```
 
 ## Quick Start
 
 ```typescript
-import { Client, Config } from "mailstream";
+import { Client, Config } from "@quill-co/mailstream";
 
 async function main() {
 	const config: Config = {
@@ -79,24 +79,6 @@ interface Config {
 ```
 
 ## Advanced Usage
-
-### Email Monitor
-
-```typescript
-import { EmailMonitor } from "mailstream/monitor";
-
-const monitor = new EmailMonitor(
-	{
-		host: "imap.gmail.com",
-		port: 993,
-		email: "your.email@gmail.com",
-		password: "your-app-specific-password",
-	},
-	30000
-); // Check every 30 seconds
-
-await monitor.start();
-```
 
 ### Custom Debug Logging
 
