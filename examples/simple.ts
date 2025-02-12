@@ -13,14 +13,15 @@ async function simpleExample() {
 
 	const client = await Client.create(config);
 
+	// Listen for new emails
 	client.on("mail", (mail) => {
 		console.log("New email received:");
-		console.log(`From: ${mail.from.map((f: any) => f.address).join(", ")}`);
+		console.log(`From: ${mail.from[0].address}`);
+		console.log(`To: ${mail.to[0].address}`);
 		console.log(`Subject: ${mail.subject}`);
+		console.log(`Date: ${mail.date}`);
 		console.log(`Content: ${mail.plain?.toString().substring(0, 100)}...`);
 	});
-
-	await client.getUnseenMails();
 
 	// Keep the connection alive
 	process.on("SIGINT", async () => {
@@ -28,3 +29,5 @@ async function simpleExample() {
 		process.exit(0);
 	});
 }
+
+simpleExample();

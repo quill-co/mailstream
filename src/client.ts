@@ -1,12 +1,16 @@
 import Imap, { type Box, type ImapMessage } from "imap";
-import { simpleParser, ParsedMail, type EmailAddress, type AddressObject } from "mailparser";
+import { simpleParser, type EmailAddress, type AddressObject } from "mailparser";
 import { EventEmitter } from "events";
 import { type Config, type Mail, type DebugOptions } from "./types";
 
+/**
+ * IMAP Email Client for streaming and retrieving emails
+ */
 export class Client extends EventEmitter {
 	private client: any;
 	private currentBox: Box | null = null;
-	private seenUIDs: Set<number> = new Set();
+	private numMessages: number = 0;
+	private mailListeners: Array<(mail: Mail) => void> = [];
 	private debugOptions: Required<DebugOptions>;
 
 	constructor(private config: Config) {
@@ -21,25 +25,50 @@ export class Client extends EventEmitter {
 			email: config.email,
 			mailbox: config.mailbox,
 		});
+		this.config.mailbox = config.mailbox || "INBOX";
 	}
 
-	private debug(message: string, ...args: any[]) {
-		if (this.debugOptions.enabled) {
-			this.debugOptions.logger(message, ...args);
-		}
-	}
-
+	/**
+	 * Create and connect a new IMAP client
+	 * @param config - IMAP client configuration
+	 * @returns Initialized IMAP client
+	 */
 	public static async create(config: Config): Promise<Client> {
 		const client = new Client(config);
 		await client.connect();
 		return client;
 	}
 
-	getCurrentBox(): Box | null {
+	/**
+	 * Debugging method with configurable logging
+	 * @param message - Log message
+	 * @param args - Additional log arguments
+	 */
+	private debug(message: string, ...args: any[]): void {
+		if (this.debugOptions.enabled) {
+			const logger = this.debugOptions.logger || console.log;
+
+			if (args.length > 0) {
+				logger(message, ...args);
+			} else {
+				logger(message);
+			}
+		}
+	}
+
+	/**
+	 * Get the current mailbox
+	 * @returns Current mailbox or null
+	 */
+	public getCurrentBox(): Box | null {
 		return this.currentBox;
 	}
 
-	getMailboxStatus(): { total: number; new: number; unseen: number } | null {
+	/**
+	 * Get the mailbox status
+	 * @returns Mailbox status object or null
+	 */
+	public getMailboxStatus(): { total: number; new: number; unseen: number } | null {
 		if (!this.currentBox) {
 			this.debug("Attempted to get mailbox status with no current box");
 			return null;
@@ -53,7 +82,12 @@ export class Client extends EventEmitter {
 		return status;
 	}
 
-	async switchMailbox(mailboxName: string): Promise<Box> {
+	/**
+	 * Switch to a different mailbox
+	 * @param mailboxName - Name of the mailbox to switch to
+	 * @returns Promise resolving to the new mailbox
+	 */
+	public async switchMailbox(mailboxName: string): Promise<Box> {
 		this.debug(`Switching to mailbox: ${mailboxName}`);
 		return new Promise((resolve, reject) => {
 			this.client.openBox(mailboxName, false, (err: Error | null, box: Box) => {
@@ -72,47 +106,57 @@ export class Client extends EventEmitter {
 		});
 	}
 
+	/**
+	 * Establish connection to IMAP server
+	 * @returns Promise resolving when connected
+	 */
 	private async connect(): Promise<void> {
 		return new Promise((resolve, reject) => {
+			this.debug(`Connecting to IMAP server ${this.config.host}:${this.config.port}`);
+
 			this.client = new Imap({
 				host: this.config.host,
 				port: this.config.port,
 				user: this.config.email,
 				password: this.config.password,
 				tls: true,
-				tlsOptions: {
-					rejectUnauthorized: false,
-				},
-				debug: this.config.debug?.enabled ? this.config.debug.logger : undefined,
+				tlsOptions: { rejectUnauthorized: false },
+				debug: this.config.debug?.connectionDebug
+					? (msg: string) => this.debug(`IMAP Connection: ${msg}`)
+					: undefined,
 			});
 
-			// Capture any connection errors
 			const errorHandler = (err: Error) => {
 				this.debug("IMAP connection error", err);
-				this.currentBox = null;
 				reject(err);
 			};
 
-			// Add error listener
 			this.client.once("error", errorHandler);
 
 			this.client.once("ready", () => {
-				// Remove error listener once connection is successful
+				this.debug("Connected to IMAP server successfully");
 				this.client.removeListener("error", errorHandler);
 
-				this.client.openBox(this.config.mailbox || "INBOX", false, (err: Error | null, box: Box) => {
+				this.client.openBox(this.config.mailbox, false, (err: Error | null, box: Box) => {
 					if (err) {
-						this.debug("Error opening mailbox", err);
+						this.debug(`Error opening mailbox ${this.config.mailbox}: ${err.message}`, err);
 						reject(err);
 						return;
 					}
+
 					this.currentBox = box;
+					this.numMessages = box.messages.total;
+					this.debug(`Opened mailbox ${this.config.mailbox}`, {
+						totalMessages: this.numMessages,
+						newMessages: box.messages.new,
+						unseenMessages: box.messages.unseen,
+					});
+
 					this.setupListeners();
 					resolve();
 				});
 			});
 
-			// Initiate connection
 			try {
 				this.client.connect();
 			} catch (err) {
@@ -121,163 +165,242 @@ export class Client extends EventEmitter {
 		});
 	}
 
+	/**
+	 * Set up event listeners for new mail
+	 */
 	private setupListeners(): void {
 		this.client.on("mail", (numNew: number) => {
-			this.debug(`New mail received: ${numNew} messages`);
-			if (this.currentBox) {
-				this.currentBox.messages.total += numNew;
-				this.currentBox.messages.new += numNew;
-			}
-			this.fetchNewMails();
-		});
-
-		this.client.on("update", (seqno: number, info: any) => {
-			// Update currentBox flags if needed
-			if (info.flags && this.currentBox) {
-				this.debug("Mailbox flags updated", {
-					seqno,
-					flags: info.flags,
-				});
-				this.emit("flagsUpdate", { seqno, flags: info.flags });
-			}
+			this.debug(`New mail received: ${numNew} messages`, {
+				currentMessageCount: this.numMessages,
+				newMessageCount: numNew,
+			});
+			this.fetchNewMessages(numNew);
 		});
 	}
 
+	/**
+	 * Fetch newly arrived messages
+	 * @param numNew - Number of new messages
+	 * @returns Promise resolving when messages are fetched
+	 */
+	private async fetchNewMessages(numNew: number): Promise<void> {
+		if (!this.client) {
+			this.debug("Attempted to fetch messages with no client");
+			return;
+		}
+
+		return new Promise((resolve, reject) => {
+			const seqStart = this.numMessages + 1;
+			const seqEnd = this.numMessages + numNew;
+
+			this.debug(`Fetching new messages`, {
+				sequenceStart: seqStart,
+				sequenceEnd: seqEnd,
+				numberOfMessages: numNew,
+			});
+
+			const fetch = this.client.seq.fetch(`${seqStart}:${seqEnd}`, {
+				bodies: ["HEADER.FIELDS (FROM TO SUBJECT DATE)", "TEXT"],
+				markSeen: false,
+			});
+
+			const messagePromises: Promise<Mail>[] = [];
+
+			fetch.on("message", (msg: ImapMessage, seqno: number) => {
+				this.debug(`Processing message`, { messageSequence: seqno });
+				messagePromises.push(this.processSingleMessage(msg));
+			});
+
+			fetch.once("error", (err: Error) => {
+				this.debug(`Fetch error: ${err.message}`, err);
+				reject(err);
+			});
+
+			fetch.once("end", async () => {
+				try {
+					const mails = await Promise.all(messagePromises);
+
+					this.debug(`Processed ${mails.length} new messages`, {
+						messageUids: mails.map((mail) => mail.uid),
+					});
+
+					mails.forEach((mail) => {
+						this.emit("mail", mail);
+						this.mailListeners.forEach((listener) => listener(mail));
+					});
+
+					this.debug("Finished fetching new messages");
+					this.numMessages += numNew;
+					resolve();
+				} catch (error) {
+					this.debug(`Error processing messages: ${error}`, error);
+					reject(error);
+				}
+			});
+		});
+	}
+
+	/**
+	 * Process a single IMAP message
+	 * @param msg - IMAP message to process
+	 * @returns Promise resolving to parsed Mail object
+	 */
+	private processSingleMessage(msg: ImapMessage): Promise<Mail> {
+		return new Promise((resolve, reject) => {
+			const buffers: { [key: string]: Buffer[] } = {
+				header: [],
+				body: [],
+			};
+
+			let uid: number | undefined;
+
+			msg.on("body", (stream, info) => {
+				const type = info.which === "TEXT" ? "body" : "header";
+				stream.on("data", (chunk: Buffer) => {
+					buffers[type].push(chunk);
+				});
+			});
+
+			msg.once("attributes", (attrs) => {
+				uid = attrs.uid;
+				this.debug(`Message attributes`, {
+					uid,
+					seq: attrs.seqno,
+					flags: attrs.flags,
+				});
+			});
+
+			msg.once("end", async () => {
+				try {
+					const headerBuffer = Buffer.concat(buffers.header);
+					const bodyBuffer = Buffer.concat(buffers.body);
+
+					const parsedHeader = await simpleParser(headerBuffer);
+
+					const mail: Mail = {
+						uid: uid || 0,
+						from: this.extractAddresses(parsedHeader.from),
+						to: this.extractAddresses(parsedHeader.to),
+						subject: parsedHeader.subject || "",
+						date: parsedHeader.date ? new Date(parsedHeader.date) : new Date(),
+						plain: bodyBuffer,
+						html: undefined,
+					};
+
+					this.debug("Parsed mail message", {
+						uid: mail.uid,
+						from: mail.from.map((f) => f.address).join(", "),
+						subject: mail.subject,
+						date: mail.date.toISOString(),
+					});
+
+					resolve(mail);
+				} catch (error) {
+					this.debug(`Error processing single message: ${error}`, error);
+					reject(error);
+				}
+			});
+		});
+	}
+
+	/**
+	 * Retrieve all unseen messages
+	 * @returns Promise resolving when unseen messages are processed
+	 */
 	public async getUnseenMails(): Promise<void> {
 		if (!this.client) {
 			this.debug("Attempted to get unseen mails with no client");
 			throw new Error("Client not connected");
 		}
 
-		if (!this.currentBox) {
-			this.debug("Attempted to get unseen mails with no mailbox selected");
-			throw new Error("No mailbox selected");
-		}
-
 		return new Promise((resolve, reject) => {
-			this.client.search(["UNSEEN"], async (err: Error | null, uids: number[]) => {
+			this.debug("Searching for unseen messages");
+
+			this.client.search(["UNSEEN"], (err: Error | null, uids: number[]) => {
 				if (err) {
-					this.debug("Error searching for unseen messages:", err);
+					this.debug(`Error searching for unseen messages: ${err.message}`, err);
 					reject(err);
 					return;
 				}
 
-				this.debug(`Found unseen messages: ${uids.length}`);
+				this.debug(`Found ${uids.length} unseen messages`, { uids });
 
 				if (uids.length === 0) {
+					this.debug("No unseen messages found");
 					resolve();
 					return;
 				}
 
-				// Filter out UIDs we've already processed
-				const newUIDs = uids.filter((uid) => !this.seenUIDs.has(uid));
+				const fetch = this.client.seq.fetch(uids.join(","), {
+					bodies: ["HEADER.FIELDS (FROM TO SUBJECT DATE)", "TEXT"],
+					markSeen: false,
+				});
 
-				this.debug(`New unseen messages (not previously processed): ${newUIDs.length}`);
+				const messagePromises: Promise<Mail>[] = [];
 
-				if (newUIDs.length === 0) {
-					resolve();
-					return;
-				}
+				fetch.on("message", (msg: ImapMessage) => {
+					messagePromises.push(this.processSingleMessage(msg));
+				});
 
-				try {
-					await this.fetchMessages(newUIDs);
-					resolve();
-				} catch (error) {
-					this.debug("Error fetching messages:", error);
-					reject(error);
-				}
+				fetch.once("error", (err: Error) => {
+					this.debug(`Fetch error: ${err.message}`, err);
+					reject(err);
+				});
+
+				fetch.once("end", async () => {
+					try {
+						const mails = await Promise.all(messagePromises);
+
+						this.debug(`Processed ${mails.length} unseen messages`, {
+							messageUids: mails.map((mail) => mail.uid),
+						});
+
+						mails.forEach((mail) => {
+							this.emit("mail", mail);
+							this.mailListeners.forEach((listener) => listener(mail));
+						});
+
+						resolve();
+					} catch (error) {
+						this.debug(`Error processing unseen messages: ${error}`, error);
+						reject(error);
+					}
+				});
 			});
 		});
 	}
 
-	private async fetchMessages(uids: number[]): Promise<void> {
-		this.debug(`Fetching messages for UIDs: ${uids}`);
-		return new Promise((resolve, reject) => {
-			const fetch = this.client.fetch(uids, {
-				bodies: ["HEADER.FIELDS (FROM TO SUBJECT DATE)", "TEXT"],
-				struct: true,
-			});
-
-			let messagePromises: Promise<void>[] = [];
-
-			fetch.on("message", (msg: ImapMessage, seqno: number) => {
-				this.debug(`Processing message: ${seqno}`);
-
-				const messageData: Partial<ParsedMail> = {};
-				const buffers: { [key: string]: Buffer[] } = {
-					header: [],
-					body: [],
-				};
-
-				messagePromises.push(
-					new Promise<void>((resolveMessage) => {
-						msg.on("body", (stream, info) => {
-							const type = info.which === "TEXT" ? "body" : "header";
-
-							stream.on("data", (chunk: Buffer) => {
-								buffers[type].push(chunk);
-							});
-						});
-
-						msg.once("attributes", (attrs) => {
-							messageData.messageId = attrs.uid;
-						});
-
-						msg.once("end", async () => {
-							try {
-								const headerBuffer = Buffer.concat(buffers.header);
-								const bodyBuffer = Buffer.concat(buffers.body);
-
-								const parsedHeader = await simpleParser(headerBuffer);
-								const parsedBody = await simpleParser(bodyBuffer);
-
-								const mail: Mail = {
-									uid: parseInt(messageData.messageId!) || 0,
-									from: this.extractAddresses(parsedHeader.from || []),
-									to: this.extractAddresses(parsedHeader.to),
-									subject: parsedHeader.subject || "",
-									date: parsedHeader.date || new Date(),
-									plain: Buffer.from(parsedBody.text || ""),
-									html: Buffer.from(parsedBody.html || ""),
-								};
-
-								this.debug("Parsed mail message", {
-									uid: mail.uid,
-									from: mail.from,
-									subject: mail.subject,
-								});
-
-								this.seenUIDs.add(mail.uid);
-								this.emit("mail", mail);
-								resolveMessage();
-							} catch (error) {
-								this.debug("Error processing message:", error);
-								resolveMessage();
-							}
-						});
-					})
-				);
-			});
-
-			fetch.once("error", (err: Error) => {
-				this.debug("Fetch error:", err);
-				reject(err);
-			});
-
-			fetch.once("end", async () => {
-				this.debug("Finished fetching messages");
-				try {
-					await Promise.all(messagePromises);
-					resolve();
-				} catch (error) {
-					this.debug("Error in message processing:", error);
-					reject(error);
-				}
-			});
-		});
+	/**
+	 * Add an event listener for mail events
+	 * @param event - Event name (currently only 'mail')
+	 * @param listener - Callback function for mail events
+	 * @returns The client instance
+	 */
+	public on(event: "mail", listener: (mail: Mail) => void): this {
+		super.on(event, listener);
+		this.mailListeners.push(listener);
+		return this;
 	}
 
-	extractAddresses = (addressObj?: AddressObject | AddressObject[]): EmailAddress[] => {
+	/**
+	 * Remove a specific mail listener
+	 * @param listener - Callback function to remove
+	 * @returns The client instance
+	 */
+	public removeMailListener(listener: (mail: Mail) => void): this {
+		const index = this.mailListeners.indexOf(listener);
+		if (index !== -1) {
+			this.mailListeners.splice(index, 1);
+		}
+		return this;
+	}
+
+	/**
+	 * Extract email addresses from parsed address objects
+	 * @param addressObj - Parsed address object
+	 * @returns Array of email addresses
+	 */
+	private extractAddresses = (addressObj?: AddressObject | AddressObject[]): EmailAddress[] => {
 		if (!addressObj) return [];
 
 		if (Array.isArray(addressObj)) {
@@ -287,15 +410,10 @@ export class Client extends EventEmitter {
 		return addressObj.value;
 	};
 
-	private async fetchNewMails(): Promise<void> {
-		try {
-			this.debug("Fetching new mails");
-			await this.getUnseenMails();
-		} catch (error) {
-			this.debug("Error fetching new mails:", error);
-		}
-	}
-
+	/**
+	 * Close the IMAP connection
+	 * @returns Promise resolving when connection is closed
+	 */
 	public async close(): Promise<void> {
 		this.debug("Closing IMAP connection");
 		return new Promise((resolve) => {
