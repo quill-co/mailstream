@@ -124,6 +124,7 @@ export class Client extends EventEmitter {
 				debug: this.config.debug?.connectionDebug
 					? (msg: string) => this.debug(`IMAP Connection: ${msg}`)
 					: undefined,
+				authTimeout: 15000,
 			});
 
 			const errorHandler = (err: Error) => {
@@ -245,18 +246,17 @@ export class Client extends EventEmitter {
 	 * @param msg - IMAP message to process
 	 * @returns Promise resolving to parsed Mail object
 	 */
-	private processSingleMessage(msg: ImapMessage): Promise<Mail> {
+	private async processSingleMessage(msg: ImapMessage): Promise<Mail> {
 		return new Promise((resolve, reject) => {
 			const chunks: Buffer[] = [];
-
 			let uid: number | undefined;
-
+	
 			msg.on("body", (stream, info) => {
 				stream.on("data", (chunk: Buffer) => {
 					chunks.push(chunk);
 				});
 			});
-
+	
 			msg.once("attributes", (attrs) => {
 				uid = attrs.uid;
 				this.debug(`Message attributes`, {
@@ -265,29 +265,53 @@ export class Client extends EventEmitter {
 					flags: attrs.flags,
 				});
 			});
-
+	
 			msg.once("end", async () => {
 				try {
 					const fullMessage = Buffer.concat(chunks);
+					const messageStr = fullMessage.toString('utf8');
+					
+					// Debug the raw message
+					this.debug("Raw message content", {
+						length: fullMessage.length,
+						preview: messageStr.slice(0, 200)
+					});
+	
+					// Extract content before the From: line
+					let messageBody = '';
+					const fromIndex = messageStr.indexOf('From:');
+					if (fromIndex > 0) {
+						messageBody = messageStr.slice(0, fromIndex).trim();
+					}
+	
 					const parsed = await simpleParser(fullMessage);
-
+	
+					// Debug the extracted content
+					this.debug("Extracted content", {
+						bodyLength: messageBody.length,
+						body: messageBody,
+						extractionMethod: 'before-headers'
+					});
+	
 					const mail: Mail = {
 						uid: uid || 0,
 						from: this.extractAddresses(parsed.from),
 						to: this.extractAddresses(parsed.to),
 						subject: parsed.subject || "",
 						date: parsed.date ? new Date(parsed.date) : new Date(),
-						plain: Buffer.from(parsed.text || ""),
-                    	html: parsed.html ? Buffer.from(parsed.html) : undefined,
+						plain: Buffer.from(messageBody || ""),
+						html: parsed.html ? Buffer.from(parsed.html) : undefined,
 					};
 	
-					this.debug("Parsed mail message", {
+					this.debug("Final mail object", {
 						uid: mail.uid,
 						from: mail.from.map((f) => f.address).join(", "),
 						subject: mail.subject,
 						date: mail.date.toISOString(),
+						hasHtml: !!mail.html,
+						plainContent: messageBody
 					});
-
+	
 					resolve(mail);
 				} catch (error) {
 					this.debug(`Error processing single message: ${error}`, error);

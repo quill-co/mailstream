@@ -20,7 +20,7 @@ async function simpleExample() {
 		console.log(`To: ${mail.to[0].address}`);
 		console.log(`Subject: ${mail.subject}`);
 		console.log(`Date: ${mail.date}`);
-		console.log(`Content: ${mail.plain?.toString().substring(0, 100)}...`);
+		console.log(`Content: ${mail.plain?.toString("utf-8").substring(0, 100)}...`);
 	});
 
 	// Keep the connection alive

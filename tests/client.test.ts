@@ -286,13 +286,13 @@ describe("Client", () => {
 				const timeout = setTimeout(() => {
 					reject(new Error("Timeout waiting for all mails"));
 				}, 2000);
-		
+
 				client.on("mail", (mail) => {
 					// Only process each UID once
 					if (!processedUids.has(mail.uid)) {
 						processedUids.add(mail.uid);
 						receivedMails.push({ uid: mail.uid, subject: mail.subject });
-						
+
 						// Resolve when we've received all unique messages
 						if (processedUids.size === messages.length) {
 							clearTimeout(timeout);
@@ -337,7 +337,7 @@ describe("Client", () => {
 
 			const fetchPromise = client.getUnseenMails();
 			await Promise.all([fetchPromise, allMailsPromise]);
-			
+
 			expect(receivedMails).toEqual(messages);
 			await client.close();
 		});
