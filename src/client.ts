@@ -247,17 +247,13 @@ export class Client extends EventEmitter {
 	 */
 	private processSingleMessage(msg: ImapMessage): Promise<Mail> {
 		return new Promise((resolve, reject) => {
-			const buffers: { [key: string]: Buffer[] } = {
-				header: [],
-				body: [],
-			};
+			const chunks: Buffer[] = [];
 
 			let uid: number | undefined;
 
 			msg.on("body", (stream, info) => {
-				const type = info.which === "TEXT" ? "body" : "header";
 				stream.on("data", (chunk: Buffer) => {
-					buffers[type].push(chunk);
+					chunks.push(chunk);
 				});
 			});
 
@@ -272,21 +268,19 @@ export class Client extends EventEmitter {
 
 			msg.once("end", async () => {
 				try {
-					const headerBuffer = Buffer.concat(buffers.header);
-					const bodyBuffer = Buffer.concat(buffers.body);
-
-					const parsedHeader = await simpleParser(headerBuffer);
+					const fullMessage = Buffer.concat(chunks);
+					const parsed = await simpleParser(fullMessage);
 
 					const mail: Mail = {
 						uid: uid || 0,
-						from: this.extractAddresses(parsedHeader.from),
-						to: this.extractAddresses(parsedHeader.to),
-						subject: parsedHeader.subject || "",
-						date: parsedHeader.date ? new Date(parsedHeader.date) : new Date(),
-						plain: bodyBuffer,
-						html: undefined,
+						from: this.extractAddresses(parsed.from),
+						to: this.extractAddresses(parsed.to),
+						subject: parsed.subject || "",
+						date: parsed.date ? new Date(parsed.date) : new Date(),
+						plain: Buffer.from(parsed.text || ""),
+                    	html: parsed.html ? Buffer.from(parsed.html) : undefined,
 					};
-
+	
 					this.debug("Parsed mail message", {
 						uid: mail.uid,
 						from: mail.from.map((f) => f.address).join(", "),
